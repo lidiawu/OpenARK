@@ -3,6 +3,7 @@
 #include "D435iCamera.h"
 #include "Visualizer.h"
 
+#include <librealsense2/rs.h>
 #include <librealsense2/rs.hpp>
 #include <librealsense2/rsutil.h>
 #include <librealsense2/hpp/rs_pipeline.hpp>
@@ -61,7 +62,39 @@ namespace ark {
         depthIntrinsics = depthStream.get_intrinsics();
 
         motion_pipe = std::make_shared<rs2::pipeline>();
-        motion_pipe->start(motion_config);
+        rs2::pipeline_profile selection_motion = motion_pipe->start(motion_config);
+
+        if (RS2_API_MAJOR_VERSION > 2 || RS2_API_MAJOR_VERSION == 2 && RS2_API_MINOR_VERSION >= 22) {
+            
+            auto dev = selection.get_device();
+            auto sensors = dev.query_sensors();
+
+            auto dev_motion = selection_motion.get_device();
+            auto sensors_motion = dev_motion.query_sensors();
+
+            int global_time_option = -1;
+            string match = "Global Time Enabled";
+
+            for (int i = 0; i < rs2_option::RS2_OPTION_COUNT; i++) {
+                if (!strcmp(rs2_option_to_string((rs2_option)i), match.c_str())) {
+                    global_time_option = i;
+                    break;
+                }
+            }
+
+            if (global_time_option == -1) {
+                cout << "Couldn't find Global Time Enabled Option" << endl;
+            }
+
+            for (auto sensor: sensors) {
+                sensor.set_option((rs2_option)global_time_option, false);
+            }   
+
+            for (auto sensor: sensors_motion) {
+                sensor.set_option((rs2_option)global_time_option, false);
+            }
+        } 
+
         imuReaderThread_ = std::thread(&D435iCamera::imuReader, this);
     }
 
@@ -123,7 +156,7 @@ namespace ark {
 
         try {
             // Ensure the frame has space for all images
-            frame.images_.resize(4);
+            frame.images_.resize(5);
 
             // Get frames from camera
             auto frames = pipe->wait_for_frames();
@@ -156,6 +189,9 @@ namespace ark {
             if (frame.images_[3].empty()) frame.images_[3] = cv::Mat(cv::Size(width,height), CV_8UC3);
             std::memcpy( frame.images_[3].data, color.get_data(),3 * width * height);
 
+            if (frame.images_[4].empty()) frame.images_[4] = cv::Mat(cv::Size(width,height), CV_16UC1);
+            // 16 bits = 2 bytes
+            std::memcpy(frame.images_[4].data, depth.get_data(),width * height * 2);
 
         } catch (std::runtime_error e) {
             // Try reconnecting
@@ -199,4 +235,11 @@ namespace ark {
         }
     }
 
+    const rs2_intrinsics &D435iCamera::getDepthIntrinsics() {
+        return depthIntrinsics;
+    }
+
+    double D435iCamera::getDepthScale() {
+        return scale;
+    }
 }
